@@ -672,7 +672,7 @@ public final class ExtractorMediaSource implements MediaPeriod, MediaSource,
         ExtractorInput input = null;
         try {
           long position = positionHolder.position;
-          length = dataSource.open(new DataSpec(uri, position, C.LENGTH_UNBOUNDED, null));
+          length = dataSource.open(new DataSpec(uri, position, C.LENGTH_UNBOUNDED, uri.toString()));
           if (length != C.LENGTH_UNBOUNDED) {
             length += position;
           }

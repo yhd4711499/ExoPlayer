@@ -58,6 +58,7 @@ public final class CacheDataSource implements DataSource {
   private final DataSource cacheWriteDataSource;
   private final DataSource upstreamDataSource;
   private final EventListener eventListener;
+  private final ContentLengthCache contentLengthCache;
 
   private final boolean blockOnCache;
   private final boolean ignoreCacheOnError;
@@ -76,9 +77,9 @@ public final class CacheDataSource implements DataSource {
    * Constructs an instance with default {@link DataSource} and {@link DataSink} instances for
    * reading and writing the cache.
    */
-  public CacheDataSource(Cache cache, DataSource upstream, boolean blockOnCache,
+  public CacheDataSource(Cache cache, DataSource upstream, ContentLengthCache contentLengthCache, boolean blockOnCache,
       boolean ignoreCacheOnError) {
-    this(cache, upstream, blockOnCache, ignoreCacheOnError, Long.MAX_VALUE);
+    this(cache, upstream, contentLengthCache, blockOnCache, ignoreCacheOnError, Long.MAX_VALUE);
   }
 
   /**
@@ -86,21 +87,21 @@ public final class CacheDataSource implements DataSource {
    * reading and writing the cache. The sink is configured to fragment data such that no single
    * cache file is greater than maxCacheFileSize bytes.
    */
-  public CacheDataSource(Cache cache, DataSource upstream, boolean blockOnCache,
+  public CacheDataSource(Cache cache, DataSource upstream, ContentLengthCache contentLengthCache, boolean blockOnCache,
       boolean ignoreCacheOnError, long maxCacheFileSize) {
     this(cache, upstream, new FileDataSource(), new CacheDataSink(cache, maxCacheFileSize),
-        blockOnCache, ignoreCacheOnError, null);
+       contentLengthCache, blockOnCache, ignoreCacheOnError, null);
   }
 
   /**
    * Constructs an instance with arbitrary {@link DataSource} and {@link DataSink} instances for
    * reading and writing the cache. One use of this constructor is to allow data to be transformed
    * before it is written to disk.
-   *
    * @param cache The cache.
    * @param upstream A {@link DataSource} for reading data not in the cache.
    * @param cacheReadDataSource A {@link DataSource} for reading data from the cache.
    * @param cacheWriteDataSink A {@link DataSink} for writing data to the cache.
+   * @param contentLengthCache A {@link ContentLengthCache} for providing cached content length of given uri.
    * @param blockOnCache A flag indicating whether we will block reads if the cache key is locked.
    *     If this flag is false, then we will read from upstream if the cache key is locked.
    * @param ignoreCacheOnError Whether the cache is bypassed following any cache related error. If
@@ -109,13 +110,14 @@ public final class CacheDataSource implements DataSource {
    * @param eventListener An optional {@link EventListener} to receive events.
    */
   public CacheDataSource(Cache cache, DataSource upstream, DataSource cacheReadDataSource,
-      DataSink cacheWriteDataSink, boolean blockOnCache, boolean ignoreCacheOnError,
+      DataSink cacheWriteDataSink, ContentLengthCache contentLengthCache, boolean blockOnCache, boolean ignoreCacheOnError,
       EventListener eventListener) {
     this.cache = cache;
     this.cacheReadDataSource = cacheReadDataSource;
     this.blockOnCache = blockOnCache;
     this.ignoreCacheOnError = ignoreCacheOnError;
     this.upstreamDataSource = upstream;
+    this.contentLengthCache = contentLengthCache;
     if (cacheWriteDataSink != null) {
       this.cacheWriteDataSource = new TeeDataSource(upstream, cacheWriteDataSink);
     } else {
@@ -132,6 +134,9 @@ public final class CacheDataSource implements DataSource {
       key = dataSpec.key;
       readPosition = dataSpec.position;
       bytesRemaining = dataSpec.length;
+      if (bytesRemaining == C.LENGTH_UNBOUNDED) {
+        bytesRemaining = contentLengthCache.get(key, C.LENGTH_UNBOUNDED);
+      }
       openNextSource();
       return dataSpec.length;
     } catch (IOException e) {
@@ -196,6 +201,7 @@ public final class CacheDataSource implements DataSource {
     } else if (bytesRemaining == C.LENGTH_UNBOUNDED) {
       // TODO: Support caching for unbounded requests. This requires storing the source length
       // into the cache (the simplest approach is to incorporate it into each cache file's name).
+      // UPDATE: Implemented. see SimpleContentLengthCache for detail
       Log.w(TAG, "Cache bypassed due to unbounded length.");
       span = null;
     } else if (blockOnCache) {
@@ -227,7 +233,10 @@ public final class CacheDataSource implements DataSource {
       currentDataSource = cacheWriteDataSource != null ? cacheWriteDataSource
           : upstreamDataSource;
     }
-    currentDataSource.open(dataSpec);
+    long totalLength = currentDataSource.open(dataSpec);
+    if (currentDataSource == upstreamDataSource) {
+      contentLengthCache.commit(key, totalLength);
+    }
   }
 
   private void closeCurrentSource() throws IOException {

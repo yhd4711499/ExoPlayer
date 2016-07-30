@@ -49,10 +49,17 @@ import com.google.android.exoplayer2.ui.KeyCompatibleMediaController;
 import com.google.android.exoplayer2.ui.MediaControllerPrevNextClickListener;
 import com.google.android.exoplayer2.ui.PlayerControl;
 import com.google.android.exoplayer2.ui.SubtitleView;
+import com.google.android.exoplayer2.upstream.DataSource;
 import com.google.android.exoplayer2.upstream.DefaultBandwidthMeter;
+import com.google.android.exoplayer2.upstream.DefaultDataSource;
 import com.google.android.exoplayer2.upstream.DefaultDataSourceFactory;
 import com.google.android.exoplayer2.upstream.DefaultHttpDataSource;
 import com.google.android.exoplayer2.upstream.HttpDataSource;
+import com.google.android.exoplayer2.upstream.cache.CacheDataSource;
+import com.google.android.exoplayer2.upstream.cache.ContentLengthCache;
+import com.google.android.exoplayer2.upstream.cache.LeastRecentlyUsedCacheEvictor;
+import com.google.android.exoplayer2.upstream.cache.SimpleCache;
+import com.google.android.exoplayer2.upstream.cache.SimpleContentLengthCache;
 import com.google.android.exoplayer2.util.Util;
 
 import android.app.Activity;
@@ -76,6 +83,7 @@ import android.widget.MediaController;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.File;
 import java.net.CookieHandler;
 import java.net.CookieManager;
 import java.net.CookiePolicy;
@@ -120,7 +128,7 @@ public class PlayerActivity extends Activity implements OnKeyListener, OnTouchLi
   private Button retryButton;
 
   private String userAgent;
-  private DefaultDataSourceFactory mediaDataSourceFactory;
+  private DataSource.Factory mediaDataSourceFactory;
   private SimpleExoPlayer player;
   private MappingTrackSelector trackSelector;
   private TrackSelectionHelper trackSelectionHelper;
@@ -136,7 +144,22 @@ public class PlayerActivity extends Activity implements OnKeyListener, OnTouchLi
   public void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
     userAgent = Util.getUserAgent(this, "ExoPlayerDemo");
-    mediaDataSourceFactory = new DefaultDataSourceFactory(this, userAgent, BANDWIDTH_METER);
+
+    final DefaultDataSourceFactory defaultMediaDataSourceFactory
+            = new DefaultDataSourceFactory(this, userAgent, BANDWIDTH_METER);
+    final ContentLengthCache contentLengthProvider = new SimpleContentLengthCache(
+            new File(getCacheDir(), "content_length_cache"),
+            24 * 60 * 60 * 1000);
+    mediaDataSourceFactory = new DataSource.Factory() {
+      @Override
+      public DataSource createDataSource() {
+        LeastRecentlyUsedCacheEvictor evictor = new LeastRecentlyUsedCacheEvictor(100 * 1024 * 1024);
+        SimpleCache simpleCache = new SimpleCache(new File(getCacheDir(), "media_cache"), evictor);
+        DefaultDataSource upstream = defaultMediaDataSourceFactory.createDataSource();
+        return new CacheDataSource(simpleCache, upstream, contentLengthProvider, false, false);
+      }
+    };
+
     mainHandler = new Handler();
     if (CookieHandler.getDefault() != DEFAULT_COOKIE_MANAGER) {
       CookieHandler.setDefault(DEFAULT_COOKIE_MANAGER);
